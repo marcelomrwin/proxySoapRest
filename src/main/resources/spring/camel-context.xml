@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Configures the Camel Context -->
+<beans xmlns="http://www.springframework.org/schema/beans" xmlns:camel-cxf="http://camel.apache.org/schema/cxf"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="  http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd  http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring-2.18.3.xsd  http://camel.apache.org/schema/cxf http://camel.apache.org/schema/cxf/camel-cxf-2.18.3-spring.xsd">
+    <!-- Empacotadores / Descompactadores para mensagens com gzip no content-encoding -->
+    <bean class="org.apache.cxf.transport.common.gzip.GZIPInInterceptor" id="gZipInInterceptor"/>
+    <bean class="org.apache.cxf.transport.common.gzip.GZIPOutInterceptor" id="gZipOutInterceptor"/>
+    <camel-cxf:cxfEndpoint address="http://localhost:8080/SoapEndpoint/WSGerarProtocolo" id="wsGerarProtocoloClient" serviceClass="com.redhat.cxf.WSGerarProtocolo">
+        <camel-cxf:inInterceptors>
+            <ref bean="gZipInInterceptor"/>
+        </camel-cxf:inInterceptors>
+        <camel-cxf:outInterceptors>
+            <ref bean="gZipOutInterceptor"/>
+        </camel-cxf:outInterceptors>
+    </camel-cxf:cxfEndpoint>
+    <!-- Acesso a properties -->
+    <bean class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer" id="propertyPlaceHolder"/>
+    <!-- Configuração do conversor para JSON -->
+    <bean class="org.apache.camel.component.gson.GsonDataFormat" id="protocolodtoTogson">
+        <property name="fieldNamingPolicy" value="LOWER_CASE_WITH_UNDERSCORES"/>
+        <property name="dateFormatPattern" value="HH:mm:ss dd/MM/yyyy"/>
+        <property name="prettyPrint" value="true"/>
+        <property name="serializeNulls" value="false"/>
+    </bean>
+    <camelContext id="soapRestProxyContext" xmlns="http://camel.apache.org/schema/spring" xmlns:order="http://fabric8.com/examples/order/v7">
+        <dataFormats>
+            <xmljson id="xmljson"/>
+            <json id="jackson" library="Jackson" prettyPrint="true" unmarshalTypeName="com.redhat.cxf.Protocolo"/>
+        </dataFormats>
+        <!-- Configuração da API REST -->
+        <restConfiguration apiContextPath="/api-doc" bindingMode="off" component="servlet" contextPath="/api" enableCORS="true">
+            <dataFormatProperty key="prettyPrint" value="true"/>
+            <apiProperty key="host" value=""/>
+            <apiProperty key="api.version" value="1.0.0"/>
+            <apiProperty key="api.title" value="SOAP to REST Proxy"/>
+            <apiProperty key="api.description" value="Camel Rest Example with Swagger that provides a SOAP to REST proxy service"/>
+            <apiProperty key="api.contact.name" value="Marcelo Sales"/>
+        </restConfiguration>
+        <!-- Serviço REST para o contexto protocolo -->
+        <rest enableCORS="true" path="/protocolo" produces="application/json">
+            <description>Rest Service, returns protocol</description>
+            <!-- rest service forma tradicional -->
+            <get consumes="application/json" uri="/gerarProtocolo/{tipoProtocolo}/{origemProtocolo}">
+                <description>Gerar Protocolo</description>
+                <param dataType="string" description="tipoProtocolo" name="tipoProtocolo" required="true" type="path"/>
+                <param dataType="string" description="origemProtocolo" name="origemProtocolo" required="true" type="path"/>
+                <to uri="direct:gerarProtocoloDirect"/>
+            </get>
+            <!-- rest service forma recomendada -->
+            <post consumes="application/x-www-form-urlencoded">
+                <description>Gerar Protocolo</description>
+                <param dataType="string" description="Tipo do protocolo" name="tipoProtocolo" required="true" type="formData"/>
+                <param dataType="string" description="Origem do protocolo" name="origemProtocolo" required="true" type="formData"/>
+                <to id="configureResultCode" uri="direct:postRoute"/>
+            </post>
+        </rest>
+        <!-- Serviço REST para o contexto protocolos -->
+        <rest enableCORS="true" path="/protocolos" produces="application/json">
+            <description>Rest Service, returns protocols</description>
+            <!-- rest service forma tradicional -->
+            <get consumes="application/json" uri="/gerarProtocolos/{tipoProtocolo}/{origemProtocolo}/{quantidade}">
+                <description>Gerar Lista de Protocolos</description>
+                <param dataType="string" description="tipoProtocolo" name="tipoProtocolo" required="true" type="path"/>
+                <param dataType="string" description="origemProtocolo" name="origemProtocolo" required="true" type="path"/>
+                <param dataType="integer" description="Quantidade de protocolos" name="quantidade" required="true" type="formData"/>
+                <to uri="direct:gerarListaProtocolos"/>
+            </get>
+            <!-- rest service forma recomendada -->
+            <post consumes="application/x-www-form-urlencoded">
+                <description>Gerar Lista de Protocolos</description>
+                <param dataType="string" description="Tipo do protocolo" name="tipoProtocolo" required="true" type="formData"/>
+                <param dataType="string" description="Origem do protocolo" name="origemProtocolo" required="true" type="formData"/>
+                <param dataType="integer" description="Quantidade de protocolos" name="quantidade" required="true" type="formData"/>
+                <to id="configureListResultCode" uri="direct:postListRoute"/>
+            </post>
+        </rest>
+        <!-- rota que invoca o cliente remoto e padroniza a resposta seguindo boas práticas REST -->
+        <route id="postRoute">
+            <!-- retorno 201 para operações POST (created) -->
+            <from id="fromPostRoute" uri="direct:postRoute"/>
+            <to id="invokeClientTo" uri="direct:gerarProtocoloDirect"/>
+            <setHeader headerName="CamelHttpResponseCode" id="response201Header">
+                <constant>201</constant>
+            </setHeader>
+        </route>
+        <route id="postListRoute">
+            <from id="fromListPostRoute" uri="direct:postListRoute"/>
+            <to id="invokeListClientTo" uri="direct:gerarListaProtocolos"/>
+            <setHeader headerName="CamelHttpResponseCode" id="response201ListHeader">
+                <constant>201</constant>
+            </setHeader>
+        </route>
+        <!-- Rota que realiza a chamada ao cliente SOAP - POJO JAX-WS -->
+        <route id="invokeGerarProtocoloRoute">
+            <from id="invokeGerarProtocolo" uri="direct:gerarProtocoloDirect"/>
+            <setBody id="setBody">
+                <simple>${in.headers.tipoProtocolo},${in.headers.origemProtocolo}</simple>
+            </setBody>
+            <setHeader headerName="operationNamespace" id="setNamespaceHeader">
+                <constant>http://service.anbima.com.br/corp/protocolo</constant>
+            </setHeader>
+            <setHeader headerName="operationName" id="setOperationHeader">
+                <constant>gerarProtocolo</constant>
+            </setHeader>
+            <to id="invokeClienteTo" uri="cxf:bean:wsGerarProtocoloClient"/>
+            <to id="outputTo" uri="direct:outputRoute"/>
+        </route>
+        <route id="invokeGerarListaProtocolosRoute">
+            <from id="invokeGerarListaProtocolos" uri="direct:gerarListaProtocolos"/>
+            <setBody id="setListBody">
+                <groovy>[request.getHeaders().get("tipoProtocolo").toString(),request.getHeaders().get("origemProtocolo").toString(),request.getHeaders().get("quantidade").toInteger()]</groovy>
+            </setBody>
+            <setHeader headerName="operationNamespace" id="setNamespaceListaHeader">
+                <constant>http://service.anbima.com.br/corp/protocolo</constant>
+            </setHeader>
+            <setHeader headerName="operationName" id="setOperationListaHeader">
+                <constant>gerarListaProtocolos</constant>
+            </setHeader>
+            <to id="invokeListClienteTo" uri="cxf:bean:wsGerarProtocoloClient"/>
+            <to id="outputListTo" uri="direct:outputRoute"/>
+        </route>
+        <!-- Rota que devolve o resultado como JSON -->
+        <route id="outputRoute">
+            <!-- <convertBodyTo id="convertToBean" type="com.redhat.cxf.Protocolo" /> -->
+            <from id="outputFrom" uri="direct:outputRoute"/>
+            <setBody id="_setBody1">
+                <!-- o retorno de uma chamada pojo é um objeto org.apache.cxf.message.MessageContentsList, extrair o body. -->
+                <simple>${body[0]}</simple>
+            </setBody>
+            <marshal id="marshallJSON" ref="protocolodtoTogson"/>
+            <removeHeaders id="adjustHeaders" pattern="*"/>
+        </route>
+    </camelContext>
+</beans>

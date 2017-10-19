@@ -1,0 +1,8 @@
+camel:
+  springboot:
+    name: proxySoapRest
+
+endpoints:
+  enabled: false
+  health:
+    enabled: true
